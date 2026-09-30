@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+  <title>Generative Ink Bleed - Russian Doll Effect</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.js"></script>
+  <style>
+    body { margin: 0; background: #111; display: flex; justify-content: center; align-items: center; height: 100vh; width: 100vw; overflow: hidden; font-family: sans-serif; }
+    #loader { position: absolute; color: #666; font-size: 14px; letter-spacing: 2px; text-transform: uppercase; z-index: 10; }
+    canvas { display: block; border: 1px solid #333; box-shadow: 0 0 30px rgba(0,0,0,0.5); max-width: 95vw; max-height: 95vh; object-fit: contain; }
+  </style>
+</head>
+<body>
+  <div id="loader">Generating...</div>
+
+<script>
+let w, h, seed, colors, bg;
+const asp = 1 / 1.4;
+const artExtent = [-1.1, 1.1, -1.5, 1.5]; 
+const SUPER = 2;
+
+const palettes = [
+  ['#e63956', '#d91e36', '#6a4a3a', '#006d5b', '#ff6b6b'], 
+  ['#1f2421', '#ea8c55', '#ad2e24', '#7b9e89', '#00798c'],
+  ['#bac1b8', '#58a4b0', '#0c7c59', '#2b303a', '#d64933', '#706993', '#c60f7b'],
+  ['#223843', '#e9dbce', '#eff1f3', '#dbd3d8', '#d8b4a0']
+];
+
+function computeCanvasSize() {
+  const margin = 0.9; 
+  if (windowWidth / windowHeight < asp) {
+    w = windowWidth * margin; h = w / asp;
+  } else {
+    h = windowHeight * margin; w = h * asp;
+  }
+  w = floor(w); h = floor(h);
+}
+
+function setup() {
+  pixelDensity(1);
+  computeCanvasSize();
+  createCanvas(w, h);
+  setTimeout(() => {
+    generate();
+    document.getElementById('loader').style.display = 'none';
+  }, 100);
+  noLoop();
+}
+
+function generate() {
+  seed = floor(random(100000));
+  noiseSeed(seed);
+  randomSeed(seed);
+
+  let palette = random(palettes);
+  colors = [...palette].sort(() => random() - 0.5);
+  bg = colors.pop();
+
+  const rw = floor(w * SUPER);
+  const rh = floor(h * SUPER);
+  
+  const gfx = createGraphics(rw, rh);
+  gfx.pixelDensity(1);
+  gfx.noStroke();
+  gfx.background(bg);
+
+  const xNoise = new PerlinField(random(1000));
+  const yNoise = new PerlinField(random(1000));
+
+  const points = [];
+  for (let i = 0; i < 8; i++) {
+    points.push({
+      x: random(artExtent[0], artExtent[1]),
+      y: random(artExtent[2], artExtent[3]),
+      colIdx: i % colors.length,
+      // Only make the first 2 points "nested"
+      isNested: (i < 2) 
+    });
+  }
+
+  const inkCol = color(15, 15, 15);
+  const colObjs = colors.map(c => color(c));
+
+  function getPixelData(wx, wy) {
+    // Apply the "ink bleed" distortion
+    for (let i = 0; i < 3; i++) {
+      const dx = -1 + 2 * xNoise.get(wx, wy);
+      const dy = -1 + 2 * yNoise.get(wx, wy);
+      wx += dx * 0.4;
+      wy += dy * 0.4;
+    }
+
+    let minDist = 1e9;
+    let secondMinDist = 1e9;
+    let closestIdx = 0;
+
+    for (let i = 0; i < points.length; i++) {
+      const d = dist(wx, wy, points[i].x, points[i].y);
+      if (d < minDist) {
+        secondMinDist = minDist;
+        minDist = d;
+        closestIdx = i;
+      } else if (d < secondMinDist) {
+        secondMinDist = d;
+      }
+    }
+
+    // Draw the black "ink" border between blobs
+    const borderThickness = 0.05;
+    if (secondMinDist - minDist < borderThickness) return -1;
+
+    const p = points[closestIdx];
+    
+    // THE RUSSIAN DOLL EFFECT:
+    // If this point is nested, create rings based on distance to the center
+    if (p.isNested) {
+      // Create 5 layers inside the blob
+      let ring = floor(minDist * 12) % 2; 
+      // If ring is even, draw the border color, otherwise the point color
+      if (ring === 0) return -1; 
+    }
+
+    return p.colIdx;
+  }
+
+  gfx.loadPixels();
+  for (let py = 0; py < rh; py++) {
+    const wy = map(py + 0.5, 0, rh, artExtent[2], artExtent[3]);
+    for (let px = 0; px < rw; px++) {
+      const wx = map(px + 0.5, 0, rw, artExtent[0], artExtent[1]);
+      const idx = 4 * (px + py * rw);
+
+      const d = getPixelData(wx, wy);
+      const c = (d === -1) ? inkCol : colObjs[d];
+
+      gfx.pixels[idx + 0] = red(c);
+      gfx.pixels[idx + 1] = green(c);
+      gfx.pixels[idx + 2] = blue(c);
+      gfx.pixels[idx + 3] = 255;
+    }
+  }
+
+  // Add grain
+  for (let i = 0; i < gfx.pixels.length; i += 4) {
+    const g = random(-15, 15);
+    gfx.pixels[i + 0] = constrain(gfx.pixels[i + 0] + g, 0, 255);
+    gfx.pixels[i + 1] = constrain(gfx.pixels[i + 1] + g, 0, 255);
+    gfx.pixels[i + 2] = constrain(gfx.pixels[i + 2] + g, 0, 255);
+  }
+  gfx.updatePixels();
+
+  background(bg);
+  image(gfx, 0, 0, w, h);
+}
+
+class PerlinField {
+  constructor(off) { this.off = off; }
+  get(x, y) { return noise(x * 0.7 + this.off, y * 0.7 + this.off); }
+}
+
+function keyPressed() {
+  if (key === ' ') {
+    document.getElementById('loader').style.display = 'block';
+    setTimeout(() => { generate(); document.getElementById('loader').style.display = 'none'; }, 10);
+  }
+}
+
+function windowResized() {
+  computeCanvasSize();
+  resizeCanvas(w, h);
+  generate();
+}
+</script>
+</body>
+</html>
